@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "dataset": "reconstruction1-exact-triangle-surface-voxels",
+  "generatedAt": "2026-09-26T08:49:43.653Z",
+  "tileCount": 1,
+  "tiles": [
+    {
+      "id": "reconstruction1",
+      "sourceModel": "reconstruction1/tileset.json",
+      "file": "surface_voxels.npz",
+      "coordinateSystem": "local-enu-at-tileset-root-after-ground-alignment",
+      "centerWgs84": [
+        117.14160497553604,
+        34.21564240622382,
+        0
+      ],
+      "referenceBboxWgs84": [
+        117.13255918792736,
+        34.20787564392489,
+        117.15072130617827,
+        34.223309321618444
+      ],
+      "grid": {
+        "kind": "surface-voxel-v1",
+        "resolutionMeters": 0.5,
+        "originEastMeters": -833.5,
+        "originNorthMeters": -861.5,
+        "originUpMeters": -76.5,
+        "columns": 3347,
+        "rows": 3424,
+        "levels": 293
+      },
+      "safety": {
+        "horizontalMeters": 0,
+        "verticalMeters": 0
+      },
+      "sparseArrays": {
+        "occupiedFlatIndex": "occupied_indices"
+      },
+      "statistics": {
+        "leafGlbs": 3715,
+        "vertices": 58856306,
+        "triangles": 94613078,
+        "occupiedVoxels": 20887294,
+        "totalVoxels": 3357817504,
+        "occupancyRatio": 0.006220497086312169
+      }
+    }
+  ]
+}
