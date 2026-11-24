@@ -77,6 +77,42 @@ class RegistryTests(unittest.TestCase):
         self.assertIsNone(self.state()["telemetry"])
         self.assertTrue(self.state()["telemetryStale"])
 
+    def test_dji_status_is_independent_of_position_and_expires(self):
+        device = RegisterDevice(type="register", deviceId="sim-test", name="DJI", source="dji", model="DJI Mini 3")
+        self.session = self.registry.register(1, device)
+        base = datetime.now(timezone.utc)
+        dji = dict(heightEllipsoidMeters=None, heightRelativeTakeoffMeters=None,
+                   heightSource="unavailable", flightMode="GPS_NORMAL")
+        no_fix = dict(dji, positionValid=False, lat=None, lng=None, positioningQuality="unavailable")
+
+        self.send(1, **no_fix, batteryPercent=81, capturedAt=base)
+        self.assertIsNone(self.state()["telemetry"])
+        self.assertEqual(self.state()["aircraftStatus"]["batteryPercent"], 81)
+        self.send(2, **dji, positioningQuality="gnss", capturedAt=base + timedelta(seconds=1))
+        self.send(3, **no_fix, batteryPercent=80, capturedAt=base + timedelta(seconds=2))
+        self.assertTrue(self.state()["telemetryStale"])
+        self.assertEqual(self.state()["telemetry"]["sequence"], 2)
+        self.assertEqual(self.state()["aircraftStatus"]["batteryPercent"], 80)
+        with self.assertRaisesRegex(RegistryError, "old_capture"):
+            self.send(4, **no_fix, batteryPercent=99, capturedAt=base)
+        with self.assertRaisesRegex(RegistryError, "telemetry_expired"):
+            self.send(4, **no_fix, batteryPercent=99, capturedAt=base + timedelta(seconds=3), sourceAgeMs=3000)
+
+        self.now += 3.1
+        self.registry.tick()
+        self.assertIsNone(self.state()["aircraftStatus"])
+        self.assertTrue(self.state()["gatewayConnected"])
+        self.send(5, **no_fix, capturedAt=base + timedelta(seconds=4))
+        self.registry.heartbeat(1, "sim-test", Heartbeat(type="heartbeat", gatewaySessionId=self.session,
+                                                        sequence=6, aircraftConnected=False))
+        self.assertIsNone(self.state()["aircraftStatus"])
+        self.assertEqual(self.state()["telemetry"]["sequence"], 2)
+        self.registry.heartbeat(1, "sim-test", Heartbeat(type="heartbeat", gatewaySessionId=self.session, sequence=7))
+        self.send(8, **no_fix, capturedAt=base + timedelta(seconds=5))
+        self.registry.register(1, device)
+        self.assertIsNone(self.state()["aircraftStatus"])
+        self.assertEqual(self.state()["telemetry"]["sequence"], 2)
+
     def test_duplicate_and_old_samples_never_refresh_valid_position(self):
         self.send()
         before = self.state()["receivedAt"]
@@ -202,6 +238,26 @@ class WebSocketTests(unittest.TestCase):
             with self.assertRaises(WebSocketDisconnect):
                 socket.receive_json()
         self.assertEqual(self.client.get("/api/drones", headers=self.headers()).json()["devices"], [])
+
+    def test_viewer_receives_dji_battery_before_gnss_fix(self):
+        with self.client.websocket_connect("/api/drones/stream") as viewer:
+            self.auth(viewer)
+            self.assertEqual(viewer.receive_json()["devices"], [])
+            with self.client.websocket_connect("/api/gateway/session") as gateway:
+                self.auth(gateway)
+                device = RegisterDevice(type="register", deviceId="dji-test", name="DJI",
+                                        source="dji", model="DJI Mini 3")
+                gateway.send_json(device.model_dump())
+                session = gateway.receive_json()["gatewaySessionId"]
+                self.assertIsNone(viewer.receive_json()["device"]["aircraftStatus"])
+                gateway.send_json(telemetry(session, positionValid=False, lat=None, lng=None,
+                                            heightEllipsoidMeters=None, heightRelativeTakeoffMeters=None,
+                                            heightSource="unavailable", positioningQuality="unavailable",
+                                            batteryPercent=81, flightMode="UNKNOWN"))
+                status = viewer.receive_json()["device"]
+                self.assertIsNone(status["telemetry"])
+                self.assertEqual(status["aircraftStatus"]["batteryPercent"], 81)
+            self.assertIsNone(viewer.receive_json()["device"]["aircraftStatus"])
 
     def test_new_gateway_survives_previous_connection_cleanup(self):
         with self.client.websocket_connect("/api/gateway/session") as old:

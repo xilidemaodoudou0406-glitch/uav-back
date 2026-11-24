@@ -18,6 +18,14 @@ class RegistryError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class AircraftStatus:
+    sampled_at: float
+    captured_at: str
+    battery_percent: float | None
+    flight_mode: str
+
+
 @dataclass
 class Device:
     owner_id: int
@@ -28,6 +36,7 @@ class Device:
     aircraft_connected: bool = True
     last_sequence: int = -1
     telemetry: dict | None = None
+    aircraft_status: AircraftStatus | None = None
     telemetry_at: float | None = None
     received_at: str | None = None
     captured_at: datetime | None = None
@@ -52,6 +61,8 @@ class DroneRegistry:
 
     def serialize(self, device):
         age = None if device.telemetry_at is None else max(0, (self.clock() - device.telemetry_at) * 1000)
+        status = device.aircraft_status
+        status_age = None if status is None else max(0, (self.clock() - status.sampled_at) * 1000)
         return {
             "deviceId": device.registration.deviceId,
             "name": device.registration.name,
@@ -66,6 +77,12 @@ class DroneRegistry:
             "receivedAt": device.received_at,
             "lastHeartbeatAgeMs": round(max(0, self.clock() - device.heartbeat_at) * 1000),
             "telemetry": device.telemetry,
+            "aircraftStatus": None if status is None else {
+                "capturedAt": status.captured_at,
+                "batteryPercent": status.battery_percent,
+                "flightMode": status.flight_mode,
+            },
+            "aircraftStatusAgeMs": None if status_age is None else round(status_age),
             "revision": device.revision,
         }
 
@@ -135,6 +152,7 @@ class DroneRegistry:
             # A live gateway is not proof that the aircraft or its previous fix is still available.
             device.position_available = False
             if not message.aircraftConnected:
+                device.aircraft_status = None
                 queue = self.command_queues.get((owner_id,device_id,device.session_id))
                 if queue:
                     while not queue.empty():
@@ -147,9 +165,10 @@ class DroneRegistry:
         device = self.ordered(owner_id, device_id, message)
         if not device.aircraft_connected:
             raise RegistryError("aircraft_disconnected")
-        if device.registration.source == "dji" and (message.heightSource == "simulation" or message.positioningQuality == "simulated" or message.missionRunId):
+        is_dji = device.registration.source == "dji"
+        if is_dji and (message.heightSource == "simulation" or message.positioningQuality == "simulated" or message.missionRunId):
             raise RegistryError("source_scope_mismatch")
-        if not message.positionValid:
+        if not is_dji and not message.positionValid:
             device.last_sequence = message.sequence
             device.position_available = False
             self.publish(device)
@@ -158,11 +177,23 @@ class DroneRegistry:
             raise RegistryError("telemetry_expired")
         if device.captured_at and message.capturedAt <= device.captured_at:
             raise RegistryError("old_capture")
+        sampled_at = self.clock() - message.sourceAgeMs / 1000
         device.last_sequence = message.sequence
         device.captured_at = message.capturedAt
+        if is_dji:
+            device.aircraft_status = AircraftStatus(
+                sampled_at=sampled_at,
+                captured_at=message.capturedAt.isoformat(),
+                battery_percent=message.batteryPercent,
+                flight_mode=message.flightMode,
+            )
+        if not message.positionValid:
+            device.position_available = False
+            self.publish(device)
+            return
         device.telemetry = message.model_dump(mode="json")
         device.position_available = True
-        device.telemetry_at = self.clock() - message.sourceAgeMs / 1000
+        device.telemetry_at = sampled_at
         device.received_at = utc_now()
         self.publish(device)
         if self.on_telemetry:
@@ -172,6 +203,7 @@ class DroneRegistry:
         device = self.devices.get((owner_id, device_id))
         if device and device.session_id == session_id and device.gateway_connected:
             device.gateway_connected = False
+            device.aircraft_status = None
             self.publish(device)
             self.command_queues.pop((owner_id, device_id, session_id), None)
             if self.on_lost:
@@ -181,7 +213,11 @@ class DroneRegistry:
         for device in self.devices.values():
             if device.gateway_connected and self.clock() - device.heartbeat_at >= self.offline_after:
                 self.disconnect(device.owner_id, device.registration.deviceId, device.session_id)
-            if device.reported_stale != self.is_stale(device):
+            status = device.aircraft_status
+            status_expired = status is not None and self.clock() - status.sampled_at >= self.stale_after
+            if status_expired:
+                device.aircraft_status = None
+            if status_expired or device.reported_stale != self.is_stale(device):
                 self.publish(device)
         if self.on_tick:
             self.on_tick()

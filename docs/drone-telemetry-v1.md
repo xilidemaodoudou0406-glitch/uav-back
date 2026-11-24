@@ -70,6 +70,8 @@ DJI 遥测用 `positioningQuality=gnss`、实际飞行模式和 `heightSource=dj
 
 无效位置、越界值、乱序、重复采集时间及已过期的数据不更新最后有效位置，不延长该位置的新鲜度。`sourceAgeMs >= 3000` 的消息在默认配置下被拒绝。拒绝回复 `type: "error"` 和原因代码，不回显令牌或完整输入。
 
+DJI 飞机尚无有效定位时，网关仍可发送 `positionValid: false` 的新鲜遥测，并将未知经纬度置为空。后端使用该消息更新电量和飞行模式，保留最后有效位置并将其标记为过期。网关首个心跳应明确报告飞机连接状态。
+
 ## 设备快照与网页订阅
 
 认证后，网页先收到 `snapshot`，之后收到 `device_updated`。空闲时每秒发送一次 `server_heartbeat`，用于判断监控链路是否仍工作。
@@ -85,6 +87,7 @@ DJI 遥测用 `positioningQuality=gnss`、实际飞行模式和 `heightSource=dj
 | `receivedAt` | 后端最后接收有效遥测的 UTC 时间。 |
 | `lastHeartbeatAgeMs` | 最近心跳年龄。 |
 | `telemetry` | 最近有效遥测；尚无数据时为空。 |
+| `aircraftStatus`, `aircraftStatusAgeMs` | DJI 最近新鲜状态与其年龄。状态包含 `capturedAt`、`batteryPercent`、`flightMode`。会话切换、断开或过期时清空。 |
 | `revision` | 后端状态版本，过滤重复或乱序状态事件。 |
 
 订阅连接的队列有上限。慢客户端积压时收到最新完整快照，避免不断累积旧数据。重连先同步快照；后端重启后版本号可能归零，新连接快照为当前依据。
